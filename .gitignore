@@ -53,3 +53,8 @@ ENV/
 htmlcov/
 .tox/
 .nox/
+
+# MaStR Rohdaten (Bulk-Download, mehrere GB)
+data/mastr/
+data/wind_mastr_de.geojson
+data/wind_mastr_de.meta.json

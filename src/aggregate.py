@@ -1,6 +1,8 @@
-"""Windräder Verwaltungsgebieten zuordnen und zählen."""
+"""Windanlagen Verwaltungsgebieten zuordnen und Kennzahlen berechnen."""
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 import geopandas as gpd
 import pandas as pd
@@ -8,7 +10,13 @@ import pandas as pd
 from src.load_population import normalize_ags
 
 
-def aggregate_turbines_by_region(
+@dataclass(frozen=True)
+class OffshoreSummary:
+    anzahl: int
+    leistung_mw: float
+
+
+def _join_turbines_to_regions(
     turbines: gpd.GeoDataFrame,
     boundaries: gpd.GeoDataFrame,
     name_column: str,
@@ -36,23 +44,50 @@ def aggregate_turbines_by_region(
         retry = retry[~retry.index.duplicated(keep="first")]
         joined.loc[retry.index, name_column] = retry[name_column]
 
-    counts = (
+    return joined
+
+
+def aggregate_turbines_by_region(
+    turbines: gpd.GeoDataFrame,
+    boundaries: gpd.GeoDataFrame,
+    name_column: str,
+    *,
+    onshore_only: bool = False,
+) -> gpd.GeoDataFrame:
+    data = turbines
+    if onshore_only and "typ" in turbines.columns:
+        data = turbines[turbines["typ"] == "onshore"].copy()
+
+    if data.empty:
+        result = boundaries.copy()
+        result["anzahl"] = 0
+        result["leistung_mw"] = 0.0
+        return add_area_metrics(result)
+
+    joined = _join_turbines_to_regions(data, boundaries, name_column)
+    if "leistung_mw" not in joined.columns:
+        joined["leistung_mw"] = 0.0
+
+    stats = (
         joined.groupby(name_column, dropna=False)
-        .size()
-        .reset_index(name="anzahl")
+        .agg(anzahl=("leistung_mw", "size"), leistung_mw=("leistung_mw", "sum"))
+        .reset_index()
     )
-    counts = counts[counts[name_column].notna()]
+    stats = stats[stats[name_column].notna()]
+    stats["leistung_mw"] = stats["leistung_mw"].round(1)
 
-    result = boundaries.merge(counts, on=name_column, how="left")
+    result = boundaries.merge(stats, on=name_column, how="left")
     result["anzahl"] = result["anzahl"].fillna(0).astype(int)
-    return add_density(result)
+    result["leistung_mw"] = result["leistung_mw"].fillna(0.0)
+    return add_area_metrics(result)
 
 
-def add_density(boundaries_with_counts: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+def add_area_metrics(boundaries_with_counts: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     result = boundaries_with_counts.copy()
     projected = result.to_crs("EPSG:25832")
     result["flaeche_km2"] = (projected.geometry.area / 1_000_000).round(1)
     result["dichte"] = (result["anzahl"] / result["flaeche_km2"]).round(2)
+    result["leistung_dichte"] = (result["leistung_mw"] / result["flaeche_km2"]).round(2)
     return result
 
 
@@ -72,6 +107,9 @@ def add_population_metrics(
     result["einwohner"] = pd.to_numeric(result["einwohner"], errors="coerce")
     result["je_1000_ew"] = (
         (result["anzahl"] / result["einwohner"]) * 1000
+    ).where(result["einwohner"] > 0).round(2)
+    result["mw_je_1000_ew"] = (
+        (result["leistung_mw"] / result["einwohner"]) * 1000
     ).where(result["einwohner"] > 0).round(2)
     return result
 
@@ -101,14 +139,28 @@ def aggregate_turbines_by_kreis(
     turbines: gpd.GeoDataFrame,
     boundaries: gpd.GeoDataFrame,
 ) -> gpd.GeoDataFrame:
-    return aggregate_turbines_by_region(turbines, boundaries, "kreis_name")
+    return aggregate_turbines_by_region(
+        turbines, boundaries, "kreis_name", onshore_only=True
+    )
 
 
 def aggregate_turbines_by_bundesland(
     turbines: gpd.GeoDataFrame,
     boundaries: gpd.GeoDataFrame,
 ) -> gpd.GeoDataFrame:
-    return aggregate_turbines_by_region(turbines, boundaries, "bundesland_name")
+    return aggregate_turbines_by_region(
+        turbines, boundaries, "bundesland_name", onshore_only=True
+    )
+
+
+def compute_offshore_summary(turbines: gpd.GeoDataFrame) -> OffshoreSummary:
+    if "typ" not in turbines.columns:
+        return OffshoreSummary(anzahl=0, leistung_mw=0.0)
+    offshore = turbines[turbines["typ"] == "offshore"]
+    return OffshoreSummary(
+        anzahl=int(len(offshore)),
+        leistung_mw=round(float(offshore["leistung_mw"].sum()), 1),
+    )
 
 
 def print_summary(
@@ -118,17 +170,19 @@ def print_summary(
     label: str,
 ) -> None:
     assigned = int(boundaries_with_counts["anzahl"].sum())
+    assigned_mw = float(boundaries_with_counts["leistung_mw"].sum())
     print(f"\n=== {label} ===")
-    print(f"Windräder gesamt:     {total_turbines}")
-    print(f"Zugeordnete Zählung:  {assigned}")
-    print(f"Differenz:            {total_turbines - assigned}")
+    print(f"Windanlagen gesamt:   {total_turbines}")
+    print(f"Zugeordnet (Anzahl):  {assigned}")
+    print(f"Zugeordnet (MW):      {assigned_mw:.1f}")
+    print(f"Differenz (Anzahl):   {total_turbines - assigned}")
     print()
-    columns = [name_column, "anzahl", "flaeche_km2", "dichte"]
+    columns = [name_column, "anzahl", "leistung_mw", "flaeche_km2", "dichte", "leistung_dichte"]
     if "einwohner" in boundaries_with_counts.columns:
-        columns.extend(["einwohner", "je_1000_ew"])
+        columns.extend(["einwohner", "je_1000_ew", "mw_je_1000_ew"])
     summary = (
         boundaries_with_counts[columns]
-        .sort_values("anzahl", ascending=False)
+        .sort_values("leistung_mw", ascending=False)
         .reset_index(drop=True)
     )
     print(summary.to_string(index=False))
@@ -141,7 +195,9 @@ def print_density_summary(
 ) -> None:
     print(f"\n=== {label} (Top 10 nach Dichte) ===")
     summary = (
-        boundaries_with_counts[[name_column, "anzahl", "flaeche_km2", "dichte"]]
+        boundaries_with_counts[
+            [name_column, "anzahl", "leistung_mw", "flaeche_km2", "dichte", "leistung_dichte"]
+        ]
         .sort_values("dichte", ascending=False)
         .head(10)
         .reset_index(drop=True)
@@ -154,12 +210,20 @@ def print_population_summary(
     name_column: str,
     label: str,
 ) -> None:
-    print(f"\n=== {label} (Top 10 nach Windrädern je 1.000 EW) ===")
+    print(f"\n=== {label} (Top 10 nach MW je 1.000 EW) ===")
     summary = (
-        boundaries_with_counts[[name_column, "anzahl", "einwohner", "je_1000_ew"]]
-        .dropna(subset=["je_1000_ew"])
-        .sort_values("je_1000_ew", ascending=False)
+        boundaries_with_counts[
+            [name_column, "anzahl", "leistung_mw", "einwohner", "je_1000_ew", "mw_je_1000_ew"]
+        ]
+        .dropna(subset=["mw_je_1000_ew"])
+        .sort_values("mw_je_1000_ew", ascending=False)
         .head(10)
         .reset_index(drop=True)
     )
     print(summary.to_string(index=False))
+
+
+def print_offshore_summary(summary: OffshoreSummary) -> None:
+    print("\n=== Offshore (Wind auf See, nicht Kreis-zugeordnet) ===")
+    print(f"Anlagen:              {summary.anzahl}")
+    print(f"Installierte Leistung: {summary.leistung_mw:.1f} MW")

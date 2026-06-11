@@ -7,15 +7,25 @@ from branca.element import MacroElement
 from jinja2 import Template
 
 from src.fetch_population import STICHTAG
+from src.fetch_mastr import format_stichtag_de
 
 LAYER_LEGENDS = {
     "Bundesländer (Anzahl)": "legend-bl-anzahl",
     "Bundesländer (Dichte je km²)": "legend-bl-dichte",
     "Bundesländer (je 1.000 EW)": "legend-bl-ew",
+    "Bundesländer (MW)": "legend-bl-mw",
+    "Bundesländer (MW/km²)": "legend-bl-mw-dichte",
+    "Bundesländer (MW je 1.000 EW)": "legend-bl-mw-ew",
     "Kreise (Anzahl)": "legend-kreis-anzahl",
     "Kreise (Dichte je km²)": "legend-kreis-dichte",
     "Kreise (je 1.000 EW)": "legend-kreis-ew",
+    "Kreise (MW)": "legend-kreis-mw",
+    "Kreise (MW/km²)": "legend-kreis-mw-dichte",
+    "Kreise (MW je 1.000 EW)": "legend-kreis-mw-ew",
 }
+
+
+HEATMAP_LAYER_NAME = "Heatmap (Onshore + Offshore)"
 
 
 def format_legend_value(value: float) -> str:
@@ -205,6 +215,13 @@ class MapLayoutScript(MacroElement):
             var map = {{ this._parent.get_name() }};
             var layerLegendMap = {{ this.layer_legend_map | tojson }};
             var exportFileName = {{ this.export_file_name | tojson }};
+            var choroplethLayersByName = {
+                {%- for name, var_name in this.choropleth_layer_refs.items() %}
+                {{ name | tojson }}: {{ var_name }},
+                {%- endfor %}
+            };
+            var heatmapLayer = {{ this.heatmap_layer_ref }};
+            var heatmapLayerName = {{ this.heatmap_layer_name | tojson }};
 
             if (map.zoomControl) {
                 map.zoomControl.remove();
@@ -341,6 +358,134 @@ class MapLayoutScript(MacroElement):
                 }
             }
 
+            function isChoroplethLayer(layerName) {
+                return Object.prototype.hasOwnProperty.call(layerLegendMap, layerName);
+            }
+
+            function getOverlayLabelName(label) {
+                var span = label.querySelector("span");
+                if (span) {
+                    return span.textContent.trim();
+                }
+                return label.textContent.trim();
+            }
+
+            function findInputForLayerName(layerName) {
+                var container = document.querySelector(".leaflet-control-layers-overlays");
+                if (!container) {
+                    return null;
+                }
+
+                var matchedInput = null;
+                container.querySelectorAll("label").forEach(function(label) {
+                    if (getOverlayLabelName(label) === layerName) {
+                        matchedInput = label.querySelector("input");
+                    }
+                });
+                return matchedInput;
+            }
+
+            function disableHeatmapPointerEvents() {
+                if (!heatmapLayer) {
+                    return;
+                }
+
+                heatmapLayer.eachLayer(function(layer) {
+                    if (layer._canvas) {
+                        layer._canvas.style.pointerEvents = "none";
+                    }
+                });
+            }
+
+            function ensureChoroplethAboveHeatmap() {
+                if (heatmapLayer && map.hasLayer(heatmapLayer)) {
+                    heatmapLayer.bringToBack();
+                    heatmapLayer.eachLayer(function(layer) {
+                        if (typeof layer.bringToBack === "function") {
+                            layer.bringToBack();
+                        }
+                    });
+                    disableHeatmapPointerEvents();
+                }
+
+                Object.keys(choroplethLayersByName).forEach(function(name) {
+                    var layer = choroplethLayersByName[name];
+                    if (map.hasLayer(layer) && typeof layer.bringToFront === "function") {
+                        layer.bringToFront();
+                    }
+                });
+            }
+
+            function activateChoroplethLayer(layerName) {
+                Object.keys(choroplethLayersByName).forEach(function(name) {
+                    if (name === layerName) {
+                        return;
+                    }
+                    var layer = choroplethLayersByName[name];
+                    if (map.hasLayer(layer)) {
+                        map.removeLayer(layer);
+                    }
+                    var input = findInputForLayerName(name);
+                    if (input) {
+                        input.checked = false;
+                    }
+                    setLegendVisible(name, false);
+                });
+
+                var activeLayer = choroplethLayersByName[layerName];
+                if (!map.hasLayer(activeLayer)) {
+                    map.addLayer(activeLayer);
+                }
+                var activeInput = findInputForLayerName(layerName);
+                if (activeInput) {
+                    activeInput.checked = true;
+                }
+                setLegendVisible(layerName, true);
+                ensureChoroplethAboveHeatmap();
+            }
+
+            function setupExclusiveChoroplethControl() {
+                var container = document.querySelector(".leaflet-control-layers-overlays");
+                if (!container) {
+                    return;
+                }
+
+                container.addEventListener("click", function(event) {
+                    var label = event.target.closest("label");
+                    if (!label || !container.contains(label)) {
+                        return;
+                    }
+
+                    var input = label.querySelector("input");
+                    if (!input || input.type !== "checkbox") {
+                        return;
+                    }
+
+                    var layerName = getOverlayLabelName(label);
+                    if (!isChoroplethLayer(layerName)) {
+                        return;
+                    }
+
+                    event.preventDefault();
+                    event.stopPropagation();
+                    event.stopImmediatePropagation();
+
+                    var layer = choroplethLayersByName[layerName];
+                    if (!layer) {
+                        return;
+                    }
+
+                    if (map.hasLayer(layer)) {
+                        map.removeLayer(layer);
+                        input.checked = false;
+                        setLegendVisible(layerName, false);
+                        return;
+                    }
+
+                    activateChoroplethLayer(layerName);
+                }, true);
+            }
+
             function setLegendVisible(layerName, visible) {
                 var legendId = layerLegendMap[layerName];
                 if (!legendId) {
@@ -367,7 +512,7 @@ class MapLayoutScript(MacroElement):
                     if (!input) {
                         return;
                     }
-                    var layerName = label.textContent.trim();
+                    var layerName = getOverlayLabelName(label);
                     if (Object.prototype.hasOwnProperty.call(layerLegendMap, layerName)) {
                         setLegendVisible(layerName, input.checked);
                     }
@@ -375,22 +520,16 @@ class MapLayoutScript(MacroElement):
             }
 
             map.on("overlayadd", function(event) {
-                setLegendVisible(event.name, true);
-            });
-
-            map.on("overlayremove", function(event) {
-                setLegendVisible(event.name, false);
+                if (event.layer === heatmapLayer || event.name === heatmapLayerName) {
+                    ensureChoroplethAboveHeatmap();
+                }
             });
 
             map.whenReady(function() {
                 arrangeBottomRightControls();
+                setupExclusiveChoroplethControl();
+                disableHeatmapPointerEvents();
                 syncLegendsFromLayerControl();
-            });
-
-            document.addEventListener("change", function(event) {
-                if (event.target.closest(".leaflet-control-layers-overlays")) {
-                    syncLegendsFromLayerControl();
-                }
             });
         })();
         {% endmacro %}
@@ -400,10 +539,16 @@ class MapLayoutScript(MacroElement):
     def __init__(
         self,
         layer_legend_map: dict[str, str],
+        choropleth_layer_refs: dict[str, str] | None = None,
+        heatmap_layer_ref: str = "",
+        heatmap_layer_name: str = HEATMAP_LAYER_NAME,
         export_file_name: str = "windkarte.png",
     ) -> None:
         super().__init__()
         self.layer_legend_map = layer_legend_map
+        self.choropleth_layer_refs = choropleth_layer_refs or {}
+        self.heatmap_layer_ref = heatmap_layer_ref
+        self.heatmap_layer_name = heatmap_layer_name
         self.export_file_name = export_file_name
 
 
@@ -411,6 +556,11 @@ def add_map_layout(
     map_obj: folium.Map,
     title: str,
     legend_items_html: str,
+    mastr_stichtag: str,
+    offshore_anzahl: int = 0,
+    offshore_leistung_mw: float = 0.0,
+    choropleth_layer_refs: dict[str, str] | None = None,
+    heatmap_layer_ref: str = "",
 ) -> None:
     map_obj.get_root().header.add_child(
         folium.Element(
@@ -421,12 +571,23 @@ def add_map_layout(
 
     year, month, day = STICHTAG.split("-")
     stichtag_de = f"{day}.{month}.{year}"
+    mastr_stichtag_de = format_stichtag_de(mastr_stichtag)
+    offshore_line = ""
+    if offshore_anzahl > 0:
+        offshore_line = (
+            f"<br>Offshore gesamt: {offshore_anzahl} Anlagen, "
+            f"{offshore_leistung_mw:.1f} MW (nicht Kreis-zugeordnet)"
+        )
+
     title_html = f"""
     <div class="windkarte-title">
         <b>{title}</b><br>
         Datenquellen:<br>
-        Windräder: OpenStreetMap via Overpass Turbo<br>
+        Windanlagen: Marktstammdatenregister (MaStR), Bundesnetzagentur,
+        Stichtag {mastr_stichtag_de}<br>
+        Grenzen: OpenStreetMap via Overpass Turbo<br>
         Einwohner: Statistisches Bundesamt (Destatis), Stichtag {stichtag_de}
+        {offshore_line}
     </div>
     """
     map_obj.get_root().html.add_child(folium.Element(title_html))
@@ -438,4 +599,10 @@ def add_map_layout(
     """
     map_obj.get_root().html.add_child(folium.Element(legend_bar_html))
 
-    map_obj.add_child(MapLayoutScript(LAYER_LEGENDS.copy()))
+    map_obj.add_child(
+        MapLayoutScript(
+            LAYER_LEGENDS.copy(),
+            choropleth_layer_refs=choropleth_layer_refs,
+            heatmap_layer_ref=heatmap_layer_ref,
+        )
+    )

@@ -10,7 +10,9 @@ import folium
 import geopandas as gpd
 from folium.plugins import HeatMap
 
+from src.aggregate import OffshoreSummary
 from src.map_ui import (
+    HEATMAP_LAYER_NAME,
     LAYER_LEGENDS,
     add_map_layout,
     legend_item_html,
@@ -19,7 +21,7 @@ from src.map_ui import (
 
 @dataclass(frozen=True)
 class MapConfig:
-    title: str = "Windräder in Deutschland"
+    title: str = "Windenergie in Deutschland"
     center: tuple[float, float] = (51.16, 10.45)
     zoom_start: int = 6
     heat_radius: int = 12
@@ -32,21 +34,38 @@ KREIS_DENSITY_COLORS = ["#f7fcf5", "#c7e9c0", "#74c476", "#238b45", "#00441b"]
 BUNDESLAND_DENSITY_COLORS = ["#f7fcfd", "#ccece6", "#66c2a4", "#238b8d", "#005824"]
 KREIS_EW_COLORS = ["#f2f0f7", "#cbc9e2", "#9e9ac8", "#756bb1", "#54278f"]
 BUNDESLAND_EW_COLORS = ["#fee5d9", "#fcae91", "#fb6a4a", "#de2d26", "#a50f15"]
+KREIS_MW_COLORS = ["#fef0d9", "#fdcc8a", "#fc8d59", "#e34a33", "#b30000"]
+BUNDESLAND_MW_COLORS = ["#f7fcf0", "#ccebc5", "#7bccc4", "#2b8cbe", "#084081"]
+KREIS_MW_DENSITY_COLORS = ["#ffffcc", "#c2e699", "#78c679", "#31a354", "#006837"]
+BUNDESLAND_MW_DENSITY_COLORS = ["#ffffd4", "#fed98e", "#fe9929", "#d95f0e", "#993404"]
+KREIS_MW_EW_COLORS = ["#fde0dd", "#fa9fb5", "#f768a1", "#dd3497", "#7a0177"]
+BUNDESLAND_MW_EW_COLORS = ["#edf8e9", "#bae4b3", "#74c476", "#238b45", "#005a32"]
 
-POPUP_FIELDS = [
-    "anzahl",
-    "flaeche_km2",
-    "dichte",
-    "einwohner",
-    "je_1000_ew",
-]
-POPUP_ALIASES = [
-    "Windräder",
-    "Fläche (km²)",
-    "Dichte (je km²)",
-    "Einwohner",
-    "Windräder je 1.000 EW",
-]
+FIELD_LABELS = {
+    "anzahl": "Windanlagen",
+    "leistung_mw": "Installierte Leistung (MW)",
+    "flaeche_km2": "Fläche (km²)",
+    "dichte": "Dichte (je km²)",
+    "leistung_dichte": "Leistungsdichte (MW/km²)",
+    "einwohner": "Einwohner",
+    "je_1000_ew": "Windanlagen je 1.000 EW",
+    "mw_je_1000_ew": "MW je 1.000 EW",
+}
+
+METRIC_TOOLTIP_FIELDS = {
+    "anzahl": ["anzahl"],
+    "dichte": ["anzahl", "flaeche_km2", "dichte"],
+    "je_1000_ew": ["anzahl", "einwohner", "je_1000_ew"],
+    "leistung_mw": ["leistung_mw"],
+    "leistung_dichte": ["leistung_mw", "flaeche_km2", "leistung_dichte"],
+    "mw_je_1000_ew": ["leistung_mw", "einwohner", "mw_je_1000_ew"],
+}
+
+
+def _tooltip_config(name_column: str, value_column: str) -> tuple[list[str], list[str]]:
+    fields = [name_column, *METRIC_TOOLTIP_FIELDS[value_column]]
+    aliases = ["Gebiet:", *[f"{FIELD_LABELS[field]}:" for field in METRIC_TOOLTIP_FIELDS[value_column]]]
+    return fields, aliases
 
 LAYER_CONFIG = [
     {
@@ -55,10 +74,21 @@ LAYER_CONFIG = [
         "name_column": "bundesland_name",
         "value_column": "anzahl",
         "colors": BUNDESLAND_COUNT_COLORS,
-        "caption": "Windräder pro Bundesland (Anzahl)",
+        "caption": "Windanlagen pro Bundesland (Anzahl, Onshore)",
         "fill_opacity": 0.45,
         "weight": 2.0,
-        "show": True,
+        "show": False,
+    },
+    {
+        "layer_name": "Bundesländer (MW)",
+        "legend_id": LAYER_LEGENDS["Bundesländer (MW)"],
+        "name_column": "bundesland_name",
+        "value_column": "leistung_mw",
+        "colors": BUNDESLAND_MW_COLORS,
+        "caption": "Installierte Leistung pro Bundesland (MW, Onshore)",
+        "fill_opacity": 0.45,
+        "weight": 2.0,
+        "show": False,
     },
     {
         "layer_name": "Bundesländer (Dichte je km²)",
@@ -66,7 +96,40 @@ LAYER_CONFIG = [
         "name_column": "bundesland_name",
         "value_column": "dichte",
         "colors": BUNDESLAND_DENSITY_COLORS,
-        "caption": "Windräder pro Bundesland (je km²)",
+        "caption": "Windanlagen pro Bundesland (je km², Onshore)",
+        "fill_opacity": 0.45,
+        "weight": 2.0,
+        "show": False,
+    },
+    {
+        "layer_name": "Bundesländer (MW/km²)",
+        "legend_id": LAYER_LEGENDS["Bundesländer (MW/km²)"],
+        "name_column": "bundesland_name",
+        "value_column": "leistung_dichte",
+        "colors": BUNDESLAND_MW_DENSITY_COLORS,
+        "caption": "Leistungsdichte pro Bundesland (MW/km², Onshore)",
+        "fill_opacity": 0.45,
+        "weight": 2.0,
+        "show": False,
+    },
+    {
+        "layer_name": "Bundesländer (je 1.000 EW)",
+        "legend_id": LAYER_LEGENDS["Bundesländer (je 1.000 EW)"],
+        "name_column": "bundesland_name",
+        "value_column": "je_1000_ew",
+        "colors": BUNDESLAND_EW_COLORS,
+        "caption": "Windanlagen pro Bundesland (je 1.000 EW, Onshore)",
+        "fill_opacity": 0.45,
+        "weight": 2.0,
+        "show": False,
+    },
+    {
+        "layer_name": "Bundesländer (MW je 1.000 EW)",
+        "legend_id": LAYER_LEGENDS["Bundesländer (MW je 1.000 EW)"],
+        "name_column": "bundesland_name",
+        "value_column": "mw_je_1000_ew",
+        "colors": BUNDESLAND_MW_EW_COLORS,
+        "caption": "MW je 1.000 EW pro Bundesland (Onshore)",
         "fill_opacity": 0.45,
         "weight": 2.0,
         "show": False,
@@ -77,10 +140,21 @@ LAYER_CONFIG = [
         "name_column": "kreis_name",
         "value_column": "anzahl",
         "colors": KREIS_COUNT_COLORS,
-        "caption": "Windräder pro Kreis (Anzahl)",
+        "caption": "Windanlagen pro Kreis (Anzahl, Onshore)",
         "fill_opacity": 0.55,
         "weight": 1.0,
-        "show": True,
+        "show": False,
+    },
+    {
+        "layer_name": "Kreise (MW)",
+        "legend_id": LAYER_LEGENDS["Kreise (MW)"],
+        "name_column": "kreis_name",
+        "value_column": "leistung_mw",
+        "colors": KREIS_MW_COLORS,
+        "caption": "Installierte Leistung pro Kreis (MW, Onshore)",
+        "fill_opacity": 0.55,
+        "weight": 1.0,
+        "show": False,
     },
     {
         "layer_name": "Kreise (Dichte je km²)",
@@ -88,20 +162,20 @@ LAYER_CONFIG = [
         "name_column": "kreis_name",
         "value_column": "dichte",
         "colors": KREIS_DENSITY_COLORS,
-        "caption": "Windräder pro Kreis (je km²)",
+        "caption": "Windanlagen pro Kreis (je km², Onshore)",
         "fill_opacity": 0.55,
         "weight": 1.0,
         "show": False,
     },
     {
-        "layer_name": "Bundesländer (je 1.000 EW)",
-        "legend_id": LAYER_LEGENDS["Bundesländer (je 1.000 EW)"],
-        "name_column": "bundesland_name",
-        "value_column": "je_1000_ew",
-        "colors": BUNDESLAND_EW_COLORS,
-        "caption": "Windräder pro Bundesland (je 1.000 EW)",
-        "fill_opacity": 0.45,
-        "weight": 2.0,
+        "layer_name": "Kreise (MW/km²)",
+        "legend_id": LAYER_LEGENDS["Kreise (MW/km²)"],
+        "name_column": "kreis_name",
+        "value_column": "leistung_dichte",
+        "colors": KREIS_MW_DENSITY_COLORS,
+        "caption": "Leistungsdichte pro Kreis (MW/km², Onshore)",
+        "fill_opacity": 0.55,
+        "weight": 1.0,
         "show": False,
     },
     {
@@ -110,7 +184,18 @@ LAYER_CONFIG = [
         "name_column": "kreis_name",
         "value_column": "je_1000_ew",
         "colors": KREIS_EW_COLORS,
-        "caption": "Windräder pro Kreis (je 1.000 EW)",
+        "caption": "Windanlagen pro Kreis (je 1.000 EW, Onshore)",
+        "fill_opacity": 0.55,
+        "weight": 1.0,
+        "show": False,
+    },
+    {
+        "layer_name": "Kreise (MW je 1.000 EW)",
+        "legend_id": LAYER_LEGENDS["Kreise (MW je 1.000 EW)"],
+        "name_column": "kreis_name",
+        "value_column": "mw_je_1000_ew",
+        "colors": KREIS_MW_EW_COLORS,
+        "caption": "MW je 1.000 EW pro Kreis (Onshore)",
         "fill_opacity": 0.55,
         "weight": 1.0,
         "show": False,
@@ -142,7 +227,7 @@ def _add_region_layer(
     fill_opacity: float,
     weight: float,
     show: bool,
-) -> None:
+) -> folium.GeoJson:
     geojson_data = json.loads(boundaries.to_json())
 
     def style_function(feature: dict) -> dict:
@@ -157,24 +242,30 @@ def _add_region_layer(
     def highlight_function(_feature: dict) -> dict:
         return {"weight": weight + 1.5, "color": "#111111", "fillOpacity": min(fill_opacity + 0.2, 0.85)}
 
-    folium.GeoJson(
+    tooltip_fields, tooltip_aliases = _tooltip_config(name_column, value_column)
+    popup_fields = tooltip_fields
+    popup_aliases = [alias.rstrip(":") for alias in tooltip_aliases]
+
+    geojson = folium.GeoJson(
         geojson_data,
         name=layer_name,
         style_function=style_function,
         highlight_function=highlight_function,
         show=show,
         tooltip=folium.GeoJsonTooltip(
-            fields=[name_column, *POPUP_FIELDS],
-            aliases=["Gebiet:", *[f"{alias}:" for alias in POPUP_ALIASES]],
+            fields=tooltip_fields,
+            aliases=tooltip_aliases,
             localize=True,
         ),
         popup=folium.GeoJsonPopup(
-            fields=[name_column, *POPUP_FIELDS],
-            aliases=["Gebiet", *POPUP_ALIASES],
+            fields=popup_fields,
+            aliases=popup_aliases,
             localize=True,
             labels=True,
         ),
-    ).add_to(map_obj)
+    )
+    geojson.add_to(map_obj)
+    return geojson
 
 
 def build_map(
@@ -183,8 +274,11 @@ def build_map(
     bundeslaender_with_counts: gpd.GeoDataFrame,
     output_path: str,
     config: MapConfig | None = None,
+    offshore_summary: OffshoreSummary | None = None,
+    mastr_stichtag: str = "2025-02-09",
 ) -> folium.Map:
     config = config or MapConfig()
+    offshore_summary = offshore_summary or OffshoreSummary(anzahl=0, leistung_mw=0.0)
     data_by_column = {
         "bundesland_name": bundeslaender_with_counts,
         "kreis_name": kreise_with_counts,
@@ -209,7 +303,7 @@ def build_map(
         for point in turbines.geometry
         if point is not None and not point.is_empty
     ]
-    heat_layer = folium.FeatureGroup(name="Heatmap", show=True)
+    heat_layer = folium.FeatureGroup(name=HEATMAP_LAYER_NAME, show=True)
     HeatMap(
         heat_coords,
         radius=config.heat_radius,
@@ -220,13 +314,14 @@ def build_map(
     heat_layer.add_to(m)
 
     legend_items: list[str] = []
+    choropleth_layer_refs: dict[str, str] = {}
 
     for layer_cfg in LAYER_CONFIG:
         boundaries = data_by_column[layer_cfg["name_column"]]
         value_column = layer_cfg["value_column"]
         colormap = _color_scale(boundaries, value_column, layer_cfg["colors"])
 
-        _add_region_layer(
+        geojson = _add_region_layer(
             m,
             boundaries,
             name_column=layer_cfg["name_column"],
@@ -237,6 +332,7 @@ def build_map(
             weight=layer_cfg["weight"],
             show=layer_cfg["show"],
         )
+        choropleth_layer_refs[layer_cfg["layer_name"]] = geojson.get_name()
 
         series = boundaries[value_column].dropna()
         vmin = float(series.min()) if not series.empty else 0.0
@@ -261,6 +357,11 @@ def build_map(
         m,
         title=config.title,
         legend_items_html="\n".join(legend_items),
+        mastr_stichtag=mastr_stichtag,
+        offshore_anzahl=offshore_summary.anzahl,
+        offshore_leistung_mw=offshore_summary.leistung_mw,
+        choropleth_layer_refs=choropleth_layer_refs,
+        heatmap_layer_ref=heat_layer.get_name(),
     )
 
     m.save(output_path)

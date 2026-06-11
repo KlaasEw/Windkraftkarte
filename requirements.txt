@@ -5,3 +5,5 @@ shapely
 branca
 osm2geojson
 requests
+open-mastr
+sqlalchemy
