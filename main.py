@@ -15,6 +15,7 @@ from src.aggregate import (
 from src.build_map import build_map
 from src.fetch_boundaries import fetch_de_bundeslaender, fetch_de_kreise
 from src.fetch_population import fetch_population_csv
+from src.fetch_turbines import fetch_de_turbines
 from src.load_data import load_boundaries, load_turbines
 from src.load_population import load_population_tables
 
@@ -31,7 +32,8 @@ MAP_PATH = OUTPUT_DIR / "windkarte.html"
 
 def main() -> None:
     if not TURBINES_PATH.exists():
-        raise FileNotFoundError(f"Windrad-Datei nicht gefunden: {TURBINES_PATH}")
+        print("Windräder werden von Overpass geladen …")
+        fetch_de_turbines(TURBINES_PATH)
 
     if not KREISE_PATH.exists():
         print("Kreisgrenzen werden von Overpass geladen …")
