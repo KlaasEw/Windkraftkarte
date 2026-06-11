@@ -12,6 +12,8 @@ Interaktive Karte der Windenergieanlagen in Deutschland. Die Anwendung zählt Wi
 
 Die fertige Karte liegt unter `output/windkarte.html`. Öffne die Datei einfach im Browser (Doppelklick oder „Öffnen mit …“). Es ist keine Internetverbindung zwingend nötig, sobald die Datei einmal erzeugt wurde — für die Hintergrundkarte und den PNG-Export werden jedoch externe Dienste geladen.
 
+Die Karte ist außerdem online unter [https://klaasew.github.io/Windkraftkarte/](https://klaasew.github.io/Windkraftkarte/) erreichbar. Dort wird die zuletzt veröffentlichte Version angezeigt; Rohdaten können auf der Website nicht neu geladen oder aktualisiert werden. Für einen aktuellen Datenstand muss die Karte lokal neu erzeugt und das Repository aktualisiert werden (siehe „Karte neu erzeugen“).
+
 ### Karte neu erzeugen
 
 1. Python 3 installieren (empfohlen: Version 3.10 oder neuer).
