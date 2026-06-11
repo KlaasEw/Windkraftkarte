@@ -2,6 +2,8 @@
 
 Interaktive Karte der Windenergieanlagen in Deutschland. Die Anwendung zählt Windräder pro Kreis und Bundesland, berechnet Kennzahlen wie Flächendichte und Anteil je 1.000 Einwohner und stellt alles in einer übersichtlichen Webkarte dar.
 
+![Bild der generrierten Karte](/assets/windkarte.png)
+
 ---
 
 ## Nutzung
