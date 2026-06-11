@@ -1,0 +1,7 @@
+geopandas
+folium
+pandas
+shapely
+branca
+osm2geojson
+requests
